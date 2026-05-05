@@ -10,6 +10,14 @@ terraform {
       version = "~> 2.0"
     }
   }
+
+  backend "s3" {
+    bucket         = "email-digest-poc-tfstate"
+    key            = "terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "email-digest-poc-tfstate-lock"
+    encrypt        = true
+  }
 }
 
 provider "aws" {

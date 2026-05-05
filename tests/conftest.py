@@ -4,6 +4,15 @@ import sys
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 
+# Boto3 creates clients at module-level when handlers are imported. Without a
+# region in the environment, botocore raises NoRegionError before any mock can
+# intercept the call. Set a dummy region and dummy credentials here so module
+# loading succeeds in environments that have no AWS config (local CI, GitHub
+# Actions without AWS creds configured yet).
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
+
 # mime_parser is imported directly in test_parser.py — add its source dir eagerly.
 _email_ingest_src = os.path.join(ROOT, "src", "email_ingest")
 if _email_ingest_src not in sys.path:
