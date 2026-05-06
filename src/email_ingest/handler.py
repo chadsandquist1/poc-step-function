@@ -70,7 +70,6 @@ def _handle_new(parsed: dict):
         "originator": parsed["from"],
         "status": "COLLECTING",
         "sfnExecutionArn": "",
-        "messageIds": set(),
         "emailCount": 1,
         "createdAt": parsed["received_at"],
         "updatedAt": parsed["received_at"],
