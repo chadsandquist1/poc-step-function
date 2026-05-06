@@ -1,0 +1,5 @@
+# Ignore pip-installed packages (installed at deploy/test time via requirements.txt)
+*
+!.gitignore
+!handler.py
+!requirements.txt

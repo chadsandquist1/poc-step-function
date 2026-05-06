@@ -2,16 +2,13 @@ import json
 import logging as _logging
 import os
 import time
-from datetime import datetime, timezone
 
 import boto3
 
-s3_client = boto3.client("s3")
 ddb = boto3.resource("dynamodb")
 ses = boto3.client("ses")
 
 TABLE = ddb.Table(os.environ["DYNAMODB_TABLE"])
-BUCKET = os.environ["S3_BUCKET"]
 BOT_EMAIL = os.environ["BOT_EMAIL"]
 
 _logger = _logging.getLogger()
@@ -26,11 +23,10 @@ def _log(level: str, message: str, **fields):
 
 
 def handler(event, context):
-    # Envelope: {metadata: {correlationId, initiatedAt, originator}, context: {executionId, isTimeout}}
     metadata = event["metadata"]
     ctx = event["context"]
     exec_id = ctx["executionId"]
-    is_timeout = ctx["isTimeout"]
+    is_timeout = ctx.get("isTimeout", False)
     originator = metadata["originator"]
 
     _log("info", "handler_start", exec_id=exec_id, is_timeout=is_timeout)
@@ -47,8 +43,7 @@ def handler(event, context):
     if is_timeout:
         _send_timeout_notice(exec_id, originator, metadata["initiatedAt"], item)
     else:
-        emails = _fetch_emails(exec_id)
-        _send_digest(exec_id, originator, emails)
+        _send_digest(exec_id, originator, ctx)
 
     TABLE.update_item(
         Key={"pk": f"EXEC#{exec_id}"},
@@ -63,49 +58,61 @@ def handler(event, context):
     return {}
 
 
-def _fetch_emails(exec_id: str) -> list[dict]:
-    emails = []
-    paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=f"emails/{exec_id}/"):
-        for obj in page.get("Contents", []):
-            body = s3_client.get_object(Bucket=BUCKET, Key=obj["Key"])["Body"].read()
-            emails.append(json.loads(body))
-    emails.sort(key=lambda e: e.get("received_at", 0))
-    return emails
+def _send_digest(exec_id: str, originator: str, ctx: dict):
+    email_count = ctx.get("emailCount", 0)
+    first_email_at = ctx.get("firstEmailAt", "")
+    last_email_at = ctx.get("lastEmailAt", "")
+    timeline_text = ctx.get("timelineText", "")
+    full_body_text = ctx.get("fullBodyText", "")
 
+    # Parse AI summary — raw JSON string from Bedrock via context.
+    # Invalid JSON or absent key both result in no summary section.
+    digest_summary = None
+    summary_json = ctx.get("summaryJson")
+    if summary_json:
+        try:
+            digest_summary = json.loads(summary_json)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            _log("warn", "summary_parse_failed", exec_id=exec_id)
 
-def _send_digest(exec_id: str, originator: str, emails: list[dict]):
-    total = len(emails)
     divider = "-" * 48
+    lines = []
 
-    lines = [
-        f"=== Email Digest for Thread: {exec_id} ===",
-        f"Total emails collected: {total}",
-        "",
-    ]
-
-    for i, em in enumerate(emails, start=1):
-        received = _fmt_ts(em.get("received_at", 0))
+    if digest_summary:
         lines += [
-            divider,
-            f"Email {i} of {total}",
-            f"From:     {em.get('from', '(unknown)')}",
-            f"Received: {received}",
-            f"Subject:  {em.get('subject', '(no subject)')}",
+            "## Summary",
+            digest_summary.get("summary", ""),
             "",
-            em.get("body_text", "").strip(),
-            "",
+            "Key Points:",
         ]
+        for point in digest_summary.get("keyPoints", []):
+            lines.append(f"\u2022 {point}")
+        lines += ["", divider, ""]
+
+    lines += [
+        f"=== Email Digest for Thread: {exec_id} ===",
+        f"Total emails collected: {email_count}",
+        f"First email: {first_email_at}",
+        f"Last email:  {last_email_at}",
+        "",
+        "Timeline:",
+        timeline_text,
+        "",
+        divider,
+        "Full Content:",
+        "",
+        full_body_text,
+    ]
 
     ses.send_email(
         Source=BOT_EMAIL,
         Destination={"ToAddresses": [originator]},
         Message={
-            "Subject": {"Data": f"[{exec_id}] Digest ({total} email{'s' if total != 1 else ''})"},
+            "Subject": {"Data": f"[{exec_id}] Digest ({email_count} email{'s' if email_count != 1 else ''})"},
             "Body": {"Text": {"Data": "\n".join(lines)}},
         },
     )
-    _log("info", "digest_sent", exec_id=exec_id, total=total)
+    _log("info", "digest_sent", exec_id=exec_id, email_count=email_count)
 
 
 def _send_timeout_notice(exec_id: str, originator: str, initiated_at: str, item: dict):
@@ -124,14 +131,8 @@ def _send_timeout_notice(exec_id: str, originator: str, initiated_at: str, item:
         Source=BOT_EMAIL,
         Destination={"ToAddresses": [originator]},
         Message={
-            "Subject": {"Data": f"[{exec_id}] Thread expired — NEVER FOLLOWED UP"},
+            "Subject": {"Data": f"[{exec_id}] Thread expired \u2014 NEVER FOLLOWED UP"},
             "Body": {"Text": {"Data": body}},
         },
     )
     _log("info", "timeout_notice_sent", exec_id=exec_id, email_count=email_count)
-
-
-def _fmt_ts(epoch_ms) -> str:
-    if not epoch_ms:
-        return "(unknown)"
-    return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")

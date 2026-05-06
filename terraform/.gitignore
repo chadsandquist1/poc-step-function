@@ -5,6 +5,7 @@
 .terraform/
 .terraform.lock.hcl
 .builds/
+.layers/
 override.tf
 override.tf.json
 *_override.tf

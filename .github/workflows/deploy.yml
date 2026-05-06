@@ -46,6 +46,9 @@ jobs:
       - name: Install test dependencies
         run: pip install -r requirements-test.txt
 
+      - name: Install gather_emails Lambda dependencies
+        run: pip install -r src/gather_emails/requirements.txt --target src/gather_emails/ --upgrade --quiet
+
       - name: Run tests
         run: pytest tests/ -v
 
@@ -70,6 +73,9 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Install gather_emails Lambda dependencies
+        run: pip install -r ../src/gather_emails/requirements.txt --target ../src/gather_emails/ --upgrade --quiet
 
       - name: Write tfvars
         run: echo '${{ secrets.TF_VARS }}' > terraform.tfvars
@@ -157,6 +163,9 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
+
+      - name: Install gather_emails Lambda dependencies
+        run: pip install -r ../src/gather_emails/requirements.txt --target ../src/gather_emails/ --upgrade --quiet
 
       - name: Write tfvars
         run: echo '${{ secrets.TF_VARS }}' > terraform.tfvars

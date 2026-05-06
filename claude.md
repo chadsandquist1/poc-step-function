@@ -9,6 +9,8 @@ A serverless email consolidation system that:
 - Replies to sender with the execution ID
 - Joins follow-up emails (matched by execution ID in subject OR by `In-Reply-To` header)
 - Sends consolidated digest when an email arrives with subject `{execution_id} - FINAL`
+- Digest includes an AI-generated summary via Amazon Bedrock (Claude Haiku — lowest-cost Claude model, chosen for summarization tasks that don't require frontier reasoning)
+- If the 15-minute wait expires with no FINAL email, sends a "NEVER FOLLOWED UP" expiry notice
 
 ## Confirmed Decisions
 | # | Decision |
@@ -41,25 +43,40 @@ A serverless email consolidation system that:
               │ reply w/ ID │  └─────────┬──────────────┘
               └──────┬──────┘            │
                      ▼                   │
-        ┌────────────────────────┐       │
-        │   Step Function (Std)  │       │
-        │  ┌──────────────────┐  │       │
-        │  │ Task:            │  │       │
-        │  │ WaitForToken     │◀─┼───────┘
-        │  │ (timeout 7d)     │  │
-        │  └────────┬─────────┘  │
-        │           ▼            │
-        │  ┌──────────────────┐  │       ┌──────────┐
-        │  │ BuildAndSend λ   │ ─┼─────▶ │ SES Send │
-        │  └──────────────────┘  │       └──────────┘
-        └────────────────────────┘
+        ┌──────────────────────────────────────────┐
+        │   Step Function (Std)                    │
+        │                                          │
+        │  ┌──────────────────┐                   │
+        │  │ WaitForFinal     │◀──────────────────┘
+        │  │ (15-min timeout) │
+        │  └──┬───────────────┘
+        │     │ timeout          │ FINAL received
+        │     ▼                  ▼
+        │  ┌────────────┐  ┌──────────────────────┐
+        │  │ SendTimeout│  │ GatherEmailsForSummary│
+        │  │ Notice λ   │  │ λ (reads all S3 objs)│
+        │  └─────┬──────┘  └──────────┬───────────┘
+        │        │                    ▼
+        │        │         ┌──────────────────────┐
+        │        │         │ SummarizeDigest      │
+        │        │         │ (direct Bedrock call)│
+        │        │         │ Claude Haiku          │
+        │        │         └──────────┬───────────┘
+        │        │                    ▼
+        │        │         ┌──────────────────────┐   ┌──────────┐
+        │        │         │ BuildAndSendDigest λ  │──▶│ SES Send │
+        │        │         └──────────────────────┘   └──────────┘
+        │        ▼                                          │
+        │     SES Send ◀────────────────────────────────────
+        └──────────────────────────────────────────┘
 ```
 
 ## AWS Resources (minimum set)
 - **1** SES verified domain/identity + **1** receipt rule set
 - **1** S3 bucket: `email-digest-poc-{account}` (versioned, lifecycle 30d)
 - **1** DynamoDB table: `EmailDigestExecutions` (PK only)
-- **3** Lambdas: `EmailIngest`, `RegisterTaskToken`, `BuildAndSendDigest`
+- **4** Lambdas: `EmailIngest`, `RegisterTaskToken`, `GatherEmailsForSummary`, `BuildAndSendDigest`
+- **1** direct Bedrock invocation: `anthropic.claude-haiku-4-5-20251001-v1:0` (cost-efficient summarization, no Lambda wrapper)
 - **1** Step Function (Standard)
 - IAM roles (one per Lambda + one for SFN)
 
@@ -183,8 +200,11 @@ When we send the initial reply, we capture the SES `MessageId` and write `MSGID#
 │   │   └── parser.py                 # MIME + attachment strip
 │   ├── register_token/
 │   │   └── handler.py
+│   ├── gather_emails/
+│   │   ├── handler.py                # list S3, build timeline + fullBody for Bedrock
+│   │   └── requirements.txt          # pydantic<2, structlog (pip-installed at deploy time)
 │   └── build_and_send/
-│       └── handler.py                # gather S3 + format + SES send
+│       └── handler.py                # render digest (uses context from gather+summarize) + SES send
 └── tests/
     ├── test_parser.py
     ├── test_ingest_routing.py

@@ -16,6 +16,14 @@ data "archive_file" "build_and_send" {
   output_path = "${path.module}/.builds/build_and_send.zip"
 }
 
+# gather_emails depends on pydantic + structlog which are pip-installed into
+# src/gather_emails/ before Terraform runs (see deploy.yml and README).
+data "archive_file" "gather_emails" {
+  type        = "zip"
+  source_dir  = "${path.module}/../src/gather_emails"
+  output_path = "${path.module}/.builds/gather_emails.zip"
+}
+
 resource "aws_lambda_function" "email_ingest" {
   function_name    = "EmailIngest"
   role             = aws_iam_role.email_ingest.arn
@@ -63,8 +71,23 @@ resource "aws_lambda_function" "build_and_send" {
   environment {
     variables = {
       DYNAMODB_TABLE = aws_dynamodb_table.executions.name
-      S3_BUCKET      = aws_s3_bucket.emails.bucket
       BOT_EMAIL      = var.bot_email
+    }
+  }
+}
+
+resource "aws_lambda_function" "gather_emails" {
+  function_name    = "GatherEmailsForSummary"
+  role             = aws_iam_role.gather_emails.arn
+  handler          = "handler.handler"
+  runtime          = "python3.12"
+  filename         = data.archive_file.gather_emails.output_path
+  source_code_hash = data.archive_file.gather_emails.output_base64sha256
+  timeout          = 60
+
+  environment {
+    variables = {
+      S3_BUCKET = aws_s3_bucket.emails.bucket
     }
   }
 }
