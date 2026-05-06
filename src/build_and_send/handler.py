@@ -23,6 +23,10 @@ def _log(level: str, message: str, **fields):
 
 
 def handler(event, context):
+    if "metadata" not in event:
+        # Stranded execution started before envelope contract was deployed.
+        _log("warn", "legacy_event_ignored", raw_keys=list(event.keys()))
+        return {}
     metadata = event["metadata"]
     ctx = event["context"]
     exec_id = ctx["executionId"]
