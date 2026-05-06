@@ -1,4 +1,5 @@
 import json
+import logging as _logging
 import os
 import time
 from datetime import datetime, timezone
@@ -13,12 +14,26 @@ TABLE = ddb.Table(os.environ["DYNAMODB_TABLE"])
 BUCKET = os.environ["S3_BUCKET"]
 BOT_EMAIL = os.environ["BOT_EMAIL"]
 
+_logger = _logging.getLogger()
+_logger.setLevel(_logging.INFO)
+
+
+def _log(level: str, message: str, **fields):
+    _logger.log(
+        getattr(_logging, level.upper()),
+        json.dumps({"level": level, "message": message, **fields}),
+    )
+
 
 def handler(event, context):
-    # SFN passes the full state; unwrap Payload if present (lambda:invoke wrapping)
-    payload = event.get("Payload", event)
-    exec_id = payload["executionId"]
-    is_timeout = "timeoutError" in payload
+    # Envelope: {metadata: {correlationId, initiatedAt, originator}, context: {executionId, isTimeout}}
+    metadata = event["metadata"]
+    ctx = event["context"]
+    exec_id = ctx["executionId"]
+    is_timeout = ctx["isTimeout"]
+    originator = metadata["originator"]
+
+    _log("info", "handler_start", exec_id=exec_id, is_timeout=is_timeout)
 
     resp = TABLE.get_item(
         Key={"pk": f"EXEC#{exec_id}"},
@@ -26,13 +41,11 @@ def handler(event, context):
     )
     item = resp.get("Item")
     if not item:
-        print(f"[ERROR] No execution record for {exec_id}; cannot send.")
-        return
-
-    originator = item["originator"]
+        _log("error", "no_execution_record", exec_id=exec_id)
+        return {}
 
     if is_timeout:
-        _send_timeout_notice(exec_id, originator, item)
+        _send_timeout_notice(exec_id, originator, metadata["initiatedAt"], item)
     else:
         emails = _fetch_emails(exec_id)
         _send_digest(exec_id, originator, emails)
@@ -46,6 +59,8 @@ def handler(event, context):
             ":now": int(time.time() * 1000),
         },
     )
+    _log("info", "handler_complete", exec_id=exec_id)
+    return {}
 
 
 def _fetch_emails(exec_id: str) -> list[dict]:
@@ -90,17 +105,17 @@ def _send_digest(exec_id: str, originator: str, emails: list[dict]):
             "Body": {"Text": {"Data": "\n".join(lines)}},
         },
     )
+    _log("info", "digest_sent", exec_id=exec_id, total=total)
 
 
-def _send_timeout_notice(exec_id: str, originator: str, item: dict):
-    created = _fmt_ts(item.get("createdAt", 0))
+def _send_timeout_notice(exec_id: str, originator: str, initiated_at: str, item: dict):
     email_count = int(item.get("emailCount", 0))
 
     body = (
         f"=== Thread Expired: {exec_id} ===\n\n"
         f"Your email thread was opened but no FINAL email was received within 15 minutes.\n\n"
         f"Thread ID:              {exec_id}\n"
-        f"Opened:                 {created}\n"
+        f"Opened:                 {initiated_at}\n"
         f"Emails collected:       {email_count}\n\n"
         f"No digest was sent. To start a new thread, send a new email."
     )
@@ -113,6 +128,7 @@ def _send_timeout_notice(exec_id: str, originator: str, item: dict):
             "Body": {"Text": {"Data": body}},
         },
     )
+    _log("info", "timeout_notice_sent", exec_id=exec_id, email_count=email_count)
 
 
 def _fmt_ts(epoch_ms) -> str:

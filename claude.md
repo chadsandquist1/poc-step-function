@@ -1,5 +1,7 @@
 # Email Digest Step Function POC
 
+> **Step Function standards**: All state machine design and Lambda handler conventions follow [`step-functions-contracts.md`](step-functions-contracts.md). Read that file before modifying the state machine definition or any Lambda that participates in the envelope.
+
 ## Overview
 A serverless email consolidation system that:
 - Receives emails via SES, stores them in S3 (no attachments)

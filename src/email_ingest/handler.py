@@ -1,8 +1,10 @@
 import json
+import logging as _logging
 import os
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 
 import boto3
 
@@ -19,6 +21,16 @@ SFN_ARN = os.environ["SFN_ARN"]
 BOT_EMAIL = os.environ["BOT_EMAIL"]
 
 EXEC_ID_RE = re.compile(r"\b(exec-[a-f0-9]+)\b", re.IGNORECASE)
+
+_logger = _logging.getLogger()
+_logger.setLevel(_logging.INFO)
+
+
+def _log(level: str, message: str, **fields):
+    _logger.log(
+        getattr(_logging, level.upper()),
+        json.dumps({"level": level, "message": message, **fields}),
+    )
 
 
 def handler(event, context):
@@ -61,6 +73,7 @@ def _resolve_exec_id(subject: str, in_reply_to: str):
 
 def _handle_new(parsed: dict):
     exec_id = "exec-" + uuid.uuid4().hex[:8]
+    initiated_at = datetime.now(tz=timezone.utc).isoformat()
 
     _store_email_s3(exec_id, parsed)
 
@@ -78,8 +91,22 @@ def _handle_new(parsed: dict):
     sfn_resp = sfn.start_execution(
         stateMachineArn=SFN_ARN,
         name=exec_id,
-        input=json.dumps({"executionId": exec_id}),
+        input=json.dumps({
+            "metadata": {
+                "correlationId": exec_id,
+                "initiatedAt": initiated_at,
+                "originator": parsed["from"],
+                "traceId": "",
+            },
+            "context": {
+                "executionId": exec_id,
+            },
+            "result": {},
+            "errors": [],
+        }),
     )
+
+    _log("info", "execution_started", exec_id=exec_id, arn=sfn_resp["executionArn"])
 
     TABLE.update_item(
         Key={"pk": f"EXEC#{exec_id}"},
@@ -128,23 +155,24 @@ def _handle_final(exec_id: str, parsed: dict):
     )
     item = resp.get("Item")
     if not item:
-        print(f"[WARN] No execution record for {exec_id}; ignoring FINAL.")
+        _log("warn", "final_no_record", exec_id=exec_id)
         return
 
     task_token = item.get("taskToken")
     if not task_token:
-        print(f"[WARN] No task token for {exec_id}; RegisterTaskToken may not have run yet.")
+        _log("warn", "final_no_token", exec_id=exec_id)
         return
 
     try:
         sfn.send_task_success(
             taskToken=task_token,
-            output=json.dumps({"executionId": exec_id}),
+            output=json.dumps({}),
         )
+        _log("info", "task_success_sent", exec_id=exec_id)
     except sfn.exceptions.InvalidToken:
-        print(f"[WARN] InvalidToken for {exec_id}; execution already completed or token expired.")
+        _log("warn", "invalid_token", exec_id=exec_id)
     except sfn.exceptions.TaskTimedOut:
-        print(f"[WARN] TaskTimedOut for {exec_id}; execution timed out before FINAL arrived.")
+        _log("warn", "task_timed_out", exec_id=exec_id)
 
     TABLE.update_item(
         Key={"pk": f"EXEC#{exec_id}"},
@@ -168,6 +196,7 @@ def _handle_followup(exec_id: str, parsed: dict):
             ":now": int(time.time() * 1000),
         },
     )
+    _log("info", "followup_stored", exec_id=exec_id)
 
 
 def _store_email_s3(exec_id: str, parsed: dict):

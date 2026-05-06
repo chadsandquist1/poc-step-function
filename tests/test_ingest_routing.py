@@ -64,6 +64,20 @@ class TestNewEmail:
         mocks["sfn"].start_execution.assert_called_once()
         assert mocks["sfn"].start_execution.call_args.kwargs["stateMachineArn"] == os.environ["SFN_ARN"]
 
+    def test_start_execution_uses_envelope(self, ingest):
+        h, mocks = ingest["handler"], ingest
+        mocks["s3"].get_object.return_value = {
+            "Body": MagicMock(read=lambda: _raw_email(from_="alice@example.com"))
+        }
+        h.handler(_ses_event(), None)
+        raw_input = json.loads(mocks["sfn"].start_execution.call_args.kwargs["input"])
+        assert "metadata" in raw_input
+        assert "context" in raw_input
+        assert "result" in raw_input
+        assert "errors" in raw_input
+        assert raw_input["metadata"]["originator"] == "alice@example.com"
+        assert "executionId" in raw_input["context"]
+
     def test_stores_email_in_s3(self, ingest):
         h, mocks = ingest["handler"], ingest
         mocks["s3"].get_object.return_value = {
