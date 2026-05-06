@@ -99,7 +99,7 @@ def _handle_new(parsed: dict):
                 f"'{exec_id}' anywhere in the subject line.\n\n"
                 f"To finalize and receive your digest, send an email with subject:\n"
                 f"  {exec_id} - FINAL\n\n"
-                f"This thread expires in 30 minutes if no FINAL email is received."
+                f"This thread expires in 15 minutes if no FINAL email is received."
             )}},
         },
         ReplyToAddresses=[BOT_EMAIL],

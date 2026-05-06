@@ -3,7 +3,7 @@ resource "aws_sfn_state_machine" "digest" {
   role_arn = aws_iam_role.sfn.arn
 
   definition = jsonencode({
-    Comment = "Email digest: wait for FINAL email (30m timeout) then send consolidated digest"
+    Comment = "Email digest: wait for FINAL email (15m timeout) then send consolidated digest"
     StartAt = "WaitForFinal"
     States = {
       WaitForFinal = {
@@ -16,7 +16,7 @@ resource "aws_sfn_state_machine" "digest" {
             "taskToken.$"   = "$$.Task.Token"
           }
         }
-        TimeoutSeconds = 1800
+        TimeoutSeconds = 900
         Catch = [{
           ErrorEquals = ["States.Timeout"]
           ResultPath  = "$.timeoutError"

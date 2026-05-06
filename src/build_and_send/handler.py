@@ -98,7 +98,7 @@ def _send_timeout_notice(exec_id: str, originator: str, item: dict):
 
     body = (
         f"=== Thread Expired: {exec_id} ===\n\n"
-        f"Your email thread was opened but no FINAL email was received within 30 minutes.\n\n"
+        f"Your email thread was opened but no FINAL email was received within 15 minutes.\n\n"
         f"Thread ID:              {exec_id}\n"
         f"Opened:                 {created}\n"
         f"Emails collected:       {email_count}\n\n"
