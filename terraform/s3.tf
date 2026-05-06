@@ -37,6 +37,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "emails" {
   rule {
     id     = "expire-30d"
     status = "Enabled"
+    filter {}
     expiration {
       days = 30
     }
