@@ -115,7 +115,7 @@ def _send_timeout_notice(exec_id: str, originator: str, item: dict):
     )
 
 
-def _fmt_ts(epoch_ms: int) -> str:
+def _fmt_ts(epoch_ms) -> str:
     if not epoch_ms:
         return "(unknown)"
-    return datetime.fromtimestamp(epoch_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.fromtimestamp(int(epoch_ms) / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
